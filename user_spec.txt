@@ -1,0 +1,76 @@
+<USER_REQUEST>
+# AMEX Learning — Complete Resource Library Implementation
+
+## Role
+
+Act as a senior full-stack developer, research engineer, and content-curation specialist. Work directly inside my existing AMEX project repository. Inspect the existing application, understand its architecture, and implement a complete, functional learning-resource library that integrates seamlessly with my existing UI.
+
+Do not just give me suggestions, sample code, or a plan. Make the changes in the actual project files, validate the resources, test the implementation, and deliver a working result.
+
+## 1. Project context
+
+My project has a Learning section containing 60 courses related to filmmaking, cinema, production, and film business.
+
+Each course has its own page. When a user opens a course, the user should see three resource categories:
+
+1. **Books / E-books**
+2. **Video Tutorials**
+3. **Recommended Websites**
+
+The user must be able to click any resource card, book title, video, or website and open the actual resource directly.
+
+I previously generated AMEX resource files that may exist in the project or workspace, including:
+
+- `amexLearningResources.js`
+- `amex_learning_resources.json`
+- `amex_learning_resources_inventory.csv`
+- `amex_learning_resources_QA.json`
+- `amex_learning_resources_README.md`
+
+A ZIP bundle may also be available.
+
+First, inspect the repository, existing resource files, routes, UI components, dependencies, and current course pages. Locate the actual resource files rather than assuming they are present.
+
+Treat the previous catalog as a starting point only. Check all existing links and replace invalid, generic, search-only, irrelevant, duplicated, or unverified links. Do not blindly import unverified data into production.
+
+Do not break the existing design, navigation, styles, or functionality.
+
+## 2. All 60 courses to support
+
+Use the following exact course names and slugs as the authoritative course list.
+
+```js
+const courseList = [
+  { name: "Cinematography",
+<truncated 20370 bytes>
+Every course has the three resource categories.
+- Each course has at least 10 verified legal complete-PDF book resources, 10 verified individual YouTube video links, and 10 verified topic-specific website links, wherever that requirement can genuinely be fulfilled.
+- Every direct-PDF claim and video-link claim has evidence supporting it.
+- No search-result URLs are used as the final destination for a resource.
+- No fabricated or unauthorized links are included.
+- Each resource opens the correct destination.
+- All resource cards are connected to the correct course.
+- The project builds successfully, and available tests pass.
+- A QA report explicitly identifies anything that could not be completed.
+
+Do not falsely declare the minimums satisfied when they are not. If any course falls short, give me the exact count, explain the constraint, and document the next steps needed to close the gap.
+
+## Final instruction
+
+Start by inspecting my actual project files and existing Learning section. Then perform the research, implementation, link validation, integration, and testing.
+
+Do not stop after generating a sample for Cinematography. Apply the same workflow across the entire 60-course catalog. Make the best possible complete implementation using the tools and resources available, and report truthfully what has been validated and what remains incomplete.
+
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-23T07:24:28+05:30.
+
+The user's current state is as follows:
+Browser State:
+  Page D07ABAFDF3C917275B8633189A10B80C (localhost) - chrome-error://chromewebdata/
+    Viewport: 1536x776, Page Height: 776
+  Page B81B4DEBAEDEC89B80A690BB7076DEE9 () - http://localhost:5174/learn?view=all [ACTIVE]
+    Viewport: 1536x776, Page Height: 3257
+  Page 59E6890E5743930664FDA9A2F45EB1F3 (Cinematography: Theory and Practice Blain Brown - Google Search) - https://www.google.com/search?tbo=p&tbm=bks&q=Cinematography:+Theory+and+Practic...
+    Viewport: 1536x776, Page Height: 3107
+</ADDITIONAL_METADATA>

@@ -1,0 +1,20 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+
+# User-uploaded documents, videos, and message attachments are runtime data.
+/server/storage/
+
+# Keys & Credentials
+Start-Service ssh-agent*
+*.pem
+*.key
+*.pub
+
+# OS & Logs
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
