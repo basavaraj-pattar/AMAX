@@ -1,11 +1,16 @@
 import 'dotenv/config'
+import dns from 'node:dns'
 import express from 'express'
 import cors from 'cors'
 import http from 'http'
 import { Server } from 'socket.io'
 import mongoose from 'mongoose'
+import { access, constants, mkdir } from 'node:fs/promises'
 import jwt from 'jsonwebtoken'
 import User from './models/User.js'
+import Conversation from './models/Conversation.js'
+import Message from './models/Message.js'
+import EquipmentListing from './models/EquipmentListing.js'
 import Community from './models/Community.js'
 import CommunityMessage from './models/CommunityMessage.js'
 import CommunityMembershipRequest from './models/CommunityMembershipRequest.js'
@@ -16,11 +21,11 @@ import communityRoutes from './routes/community.routes.js'
 import messageRoutes from './routes/message.routes.js'
 import trailerRoutes from './routes/trailer.routes.js'
 import profileRoutes from './routes/profile.routes.js'
-import filmUploadRoutes, { filmVideoDirectory } from './routes/film-upload.routes.js'
+import filmUploadRoutes from './routes/film-upload.routes.js'
 import notificationRoutes from './routes/notification.routes.js'
 import Comment from './models/Comment.js'
 import Notification from './models/Notification.js'
-import scriptUploadRoutes, { scriptDocumentDirectory } from './routes/script-upload.routes.js'
+import scriptUploadRoutes from './routes/script-upload.routes.js'
 import equipmentRoutes from './routes/equipment.routes.js'
 import EquipmentRequest from './models/EquipmentRequest.js'
 import adminRoutes from './routes/admin.routes.js'
@@ -38,31 +43,49 @@ import { getWeeklySnapshot, scheduleWeeklyShowcaseRefresh } from './services/sho
 import { refreshFestivalListings, refreshFestivalListingsIfDue } from './services/festivalCrawler.js'
 import { ensureDefaultCommunities } from './services/community.js'
 import { cleanupExpiredMessageAttachments } from './services/message-attachments.js'
+import { runtimeConfig } from './config/runtime.js'
+import { filmVideoDirectory, messageAttachmentDirectory, scriptDocumentDirectory } from './config/storage.js'
+
+const configuredDnsServers = process.env.MONGODB_DNS_SERVERS
+  ?.split(',')
+  .map(server => server.trim())
+  .filter(Boolean)
+if (configuredDnsServers?.length) dns.setServers(configuredDnsServers)
 
 const app = express()
 const server = http.createServer(app)
-const clientUrls = (process.env.CLIENT_URL || 'http://localhost:5174')
-  .split(',')
-  .map(origin => origin.trim().replace(/\/$/, ''))
-  .filter(Boolean)
-const localDevelopmentUrls = process.env.NODE_ENV === 'production' ? [] : [
+const localDevelopmentUrls = runtimeConfig.production ? [] : [
   'http://localhost:5174',
   'http://localhost:5175',
   'http://127.0.0.1:5174',
   'http://127.0.0.1:5175'
 ]
-const allowedClientOrigins = [...new Set([...clientUrls, ...localDevelopmentUrls])]
+const allowedClientOrigins = [...new Set([...runtimeConfig.clientOrigins, ...localDevelopmentUrls])]
 const isAllowedClientOrigin = origin => !origin || allowedClientOrigins.includes(origin)
-const corsOrigin = (origin, callback) => callback(
-  isAllowedClientOrigin(origin) ? null : new Error('Origin is not allowed by CORS.'),
-  isAllowedClientOrigin(origin)
-)
+const corsOrigin = (origin, callback) => {
+  const allowed = isAllowedClientOrigin(origin)
+  callback(allowed ? null : Object.assign(new Error('Origin is not allowed by CORS.'), { status: 403 }), allowed)
+}
 const io = new Server(server, { cors: { origin: allowedClientOrigins, methods: ['GET', 'POST'] } })
-const port = process.env.PORT || 5000
+const port = runtimeConfig.port
+const shutdownController = new AbortController()
+let applicationReady = false
+let attachmentCleanupTimer
+let stopShowcaseRefresh
+let shutdownPromise
 
 app.use(cors({ origin: corsOrigin, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], allowedHeaders: ['Content-Type', 'Authorization', 'X-File-Name'] }))
 app.use(express.json({ limit: '2mb' }))
-app.get('/api/health', (_req, res) => res.json({ name: 'A-MAX API', status: 'online', timestamp: new Date().toISOString() }))
+app.get('/api/health', (_req, res) => {
+  const databaseConnected = mongoose.connection.readyState === 1
+  const ready = applicationReady && (!runtimeConfig.mongoUri || databaseConnected)
+  res.status(ready ? 200 : 503).json({
+    name: 'A-MAX API',
+    status: ready ? 'online' : 'starting',
+    database: runtimeConfig.mongoUri ? (databaseConnected ? 'connected' : 'connecting') : 'disabled',
+    timestamp: new Date().toISOString()
+  })
+})
 app.set('io', io)
 app.use('/api/auth', authRoutes)
 app.use('/api/messages', messageRoutes)
@@ -150,55 +173,140 @@ io.on('connection', socket => {
   socket.on('disconnect', () => clearTimeout(expireTimer))
 })
 
-async function start() {
-  // Start the HTTP API immediately so health checks and auth routes can
-  // return useful database status while MongoDB is connecting.
-  server.listen(port, () => console.log(`A-MAX API listening on http://localhost:${port}`))
-
-  if (process.env.MONGO_URI) {
-    let retryDelayMs = 1000
-    while (mongoose.connection.readyState !== 1) {
-      try {
-        await mongoose.connect(process.env.MONGO_URI, { serverSelectionTimeoutMS: 5000 })
-        console.log('MongoDB connected')
-      } catch (error) {
-        console.warn(`MongoDB unavailable; retrying: ${error.message}`)
-        await new Promise(resolve => setTimeout(resolve, retryDelayMs))
-        retryDelayMs = Math.min(retryDelayMs * 2, 30000)
-      }
+function waitForRetry(delayMs, signal) {
+  return new Promise(resolve => {
+    let timer
+    const finish = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
     }
-  } else console.warn('MONGO_URI not set; running API without persistence')
-  if (mongoose.connection.readyState === 1) {
-    await Promise.all([
-      Comment.createIndexes(),
-      Notification.createIndexes(),
-      EquipmentRequest.createIndexes(),
-      Report.createIndexes(),
-      AuditLog.createIndexes(),
-      AdminAccount.createIndexes(),
-      Content.createIndexes(),
-      ContentView.createIndexes(),
-      ShowcaseEvent.createIndexes(),
-      WeeklyShowcase.createIndexes(),
-      Community.createIndexes(),
-      CommunityMessage.createIndexes(),
-      CommunityMembershipRequest.createIndexes(),
-      MessageAttachment.createIndexes()
-    ])
-    await ensureDefaultCommunities()
-    console.log('Application indexes ready')
-    const cleanupAttachments = () => cleanupExpiredMessageAttachments().catch(error => console.error('Expired chat attachment cleanup failed:', error.message))
-    await cleanupAttachments()
-    const attachmentCleanupTimer = setInterval(cleanupAttachments, 60 * 60 * 1000)
-    attachmentCleanupTimer.unref?.()
-    scheduleWeeklyShowcaseRefresh(refreshFestivalListings)
-    try { await getWeeklySnapshot() }
-    catch (error) { console.error('Initial weekly showcase refresh failed:', error.message) }
-    try {
-      const scan = await refreshFestivalListingsIfDue()
-      if (scan.skipped) console.log('Initial festival scan skipped:', scan.reason)
-    } catch (error) { console.error('Initial festival opportunity scan failed:', error.message) }
-  }
+    timer = setTimeout(finish, delayMs)
+    signal.addEventListener('abort', finish, { once: true })
+  })
 }
 
-start()
+async function connectToDatabase() {
+  let retryDelayMs = 1000
+  while (!shutdownController.signal.aborted) {
+    try {
+      await mongoose.connect(runtimeConfig.mongoUri, {
+        serverSelectionTimeoutMS: 5000,
+        autoIndex: false
+      })
+      console.log('MongoDB connected')
+      return true
+    } catch (error) {
+      if (shutdownController.signal.aborted) return false
+      console.warn(`MongoDB unavailable; retrying: ${error.message}`)
+      await waitForRetry(retryDelayMs, shutdownController.signal)
+      retryDelayMs = Math.min(retryDelayMs * 2, 30000)
+    }
+  }
+  return false
+}
+
+async function initializePersistence() {
+  const connected = await connectToDatabase()
+  if (!connected || shutdownController.signal.aborted) return
+
+  await Promise.all([
+    Comment.createIndexes(),
+    Notification.createIndexes(),
+    EquipmentRequest.createIndexes(),
+    Report.createIndexes(),
+    AuditLog.createIndexes(),
+    AdminAccount.createIndexes(),
+    User.createIndexes(),
+    Conversation.createIndexes(),
+    Message.createIndexes(),
+    EquipmentListing.createIndexes(),
+    Content.createIndexes(),
+    ContentView.createIndexes(),
+    ShowcaseEvent.createIndexes(),
+    WeeklyShowcase.createIndexes(),
+    Community.createIndexes(),
+    CommunityMessage.createIndexes(),
+    CommunityMembershipRequest.createIndexes(),
+    MessageAttachment.createIndexes()
+  ])
+  await ensureDefaultCommunities()
+  for (const directory of [filmVideoDirectory, scriptDocumentDirectory, messageAttachmentDirectory]) {
+    await mkdir(directory, { recursive: true })
+    await access(directory, constants.W_OK)
+  }
+  console.log('Application indexes and persistent storage ready')
+
+  const cleanupAttachments = () => cleanupExpiredMessageAttachments()
+    .catch(error => console.error('Expired chat attachment cleanup failed:', error))
+  await cleanupAttachments()
+  attachmentCleanupTimer = setInterval(cleanupAttachments, 60 * 60 * 1000)
+  attachmentCleanupTimer.unref?.()
+  stopShowcaseRefresh = scheduleWeeklyShowcaseRefresh(refreshFestivalListings)
+  applicationReady = true
+
+  void getWeeklySnapshot().catch(error => console.error('Initial weekly showcase refresh failed:', error.message))
+  void refreshFestivalListingsIfDue()
+    .then(scan => {
+      if (scan.skipped) console.log('Initial festival scan skipped:', scan.reason)
+    })
+    .catch(error => console.error('Initial festival opportunity scan failed:', error.message))
+}
+
+async function shutdown() {
+  if (shutdownPromise) return shutdownPromise
+  shutdownController.abort()
+  applicationReady = false
+  if (attachmentCleanupTimer) clearInterval(attachmentCleanupTimer)
+  stopShowcaseRefresh?.()
+  shutdownPromise = (async () => {
+    await new Promise(resolve => io.close(resolve))
+    await mongoose.disconnect()
+  })()
+  return shutdownPromise
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    console.log(`Received ${signal}; shutting down gracefully`)
+    shutdown()
+      .then(() => { if (process.exitCode === undefined) process.exitCode = 0 })
+      .catch(error => {
+        console.error('Graceful shutdown failed:', error)
+        process.exitCode = 1
+      })
+  })
+}
+
+async function start() {
+  await new Promise((resolve, reject) => {
+    const onError = error => {
+      server.off('listening', onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      server.off('error', onError)
+      resolve()
+    }
+    server.once('error', onError)
+    server.once('listening', onListening)
+    server.listen(port, '0.0.0.0')
+  })
+  console.log(`A-MAX API listening on port ${port}`)
+
+  if (!runtimeConfig.mongoUri) {
+    console.warn('MONGO_URI not set; running API without persistence')
+    applicationReady = true
+    return
+  }
+  await initializePersistence()
+}
+
+start().catch(async error => {
+  console.error('API startup failed:', error)
+  process.exitCode = 1
+  try { await shutdown() }
+  catch (shutdownError) {
+    console.error('API shutdown after startup failure failed:', shutdownError)
+  }
+})

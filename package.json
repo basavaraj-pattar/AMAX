@@ -2,6 +2,9 @@
   "name": "a-max",
   "private": true,
   "version": "0.1.0",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
     "dev:client": "npm --prefix client run dev",

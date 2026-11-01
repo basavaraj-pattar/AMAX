@@ -17,11 +17,24 @@ The client runs at `http://localhost:5174` and the API at `http://localhost:5000
 2. Add `http://localhost:5174` to its **Authorized JavaScript origins**. Google Identity Services uses its popup credential flow here, so no redirect URI or callback URL is required. Add the deployed site origin when deploying.
 3. Copy `client/.env.example` to `client/.env` and set `VITE_GOOGLE_CLIENT_ID` to the web client ID.
 4. Copy `server/.env.example` to `server/.env`. Set `GOOGLE_CLIENT_ID` to the same web client ID, set `MONGO_URI` to a running MongoDB database, and replace `JWT_SECRET` with a unique random value (for example, `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`).
+   If your network's default DNS resolver refuses Atlas SRV lookups, set the optional `MONGODB_DNS_SERVERS=1.1.1.1,1.0.0.1` in `server/.env`. Leave it unset on deployments unless their DNS resolver needs an override.
 5. To display current trailer search results in the homepage ad, enable the YouTube Data API v3 in Google Cloud and set `YOUTUBE_API_KEY` in `server/.env`. The API key remains server-side; restrict it to YouTube Data API v3 and appropriate quotas. If a key was shared publicly, rotate it before use.
 6. To enable password-reset email, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` in `server/.env`. The reset endpoint returns a setup error until SMTP is configured; it does not expose reset tokens in API responses.
 7. Restart the dev servers after changing either environment file.
 
 The project root does not need a `.env` file: Vite runs with `client/` as its root and reads `client/.env`; the API reads `server/.env`. If a root `.env` already exists, preserve its other entries and add only the relevant variable to the appropriate client or server file. The API intentionally boots without MongoDB so the client can be explored before infrastructure is configured.
+
+### Deploy the API to Render
+
+The repository includes a Render Blueprint in `render.yaml` for the backend service. In Render, create a Blueprint from this repository and provide:
+
+- `MONGO_URI`: a production MongoDB connection string. Configure the database network allowlist for Render.
+- `JWT_SECRET`: a unique random value of at least 32 characters.
+- `CLIENT_URL`: the deployed frontend origin, or comma-separated origins if more than one frontend is used.
+
+The Blueprint sets `STORAGE_DIR=/var/data` and mounts a persistent disk there. Keep the disk attached: film uploads, scripts, and chat attachments are stored on it and are not recoverable from MongoDB alone. If migrating an existing deployment, copy the contents of `server/storage` to the disk while preserving its `films`, `scripts`, and `message-attachments` subdirectories. The 10 GB disk is a starting point; increase it as uploads grow. Persistent disks require a paid Render web service.
+
+Render uses `/api/health` as its health check. It reports ready only after MongoDB, indexes, and persistent storage are available. For password-reset email and Google sign-in, also configure the SMTP variables and `GOOGLE_CLIENT_ID` in the Render environment. Configure the frontend's `VITE_API_URL` to the Render API URL plus `/api`.
 
 ### Authentication and onboarding
 

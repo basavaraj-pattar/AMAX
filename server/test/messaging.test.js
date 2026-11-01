@@ -14,8 +14,15 @@ test('message text is trimmed and its idempotency key is retained', () => {
 })
 
 test('empty and oversized messages are rejected', () => {
-  assert.throws(() => validateMessageInput('   ', 'message-123'), { status: 400, message: 'Message cannot be empty.' })
+  assert.throws(() => validateMessageInput('   ', 'message-123'), { status: 400, message: 'Write a message or attach a file.' })
   assert.throws(() => validateMessageInput('12345', 'message-123', 4), { status: 400 })
+})
+
+test('messages may contain attachments without text', () => {
+  assert.deepEqual(validateMessageInput('', 'message-123', 2000, true), {
+    body: '',
+    clientMessageId: 'message-123'
+  })
 })
 
 test('invalid idempotency keys are rejected', () => {

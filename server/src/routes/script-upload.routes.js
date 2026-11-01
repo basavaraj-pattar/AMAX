@@ -1,15 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
-import { dirname, extname, join } from 'node:path'
+import { extname, join } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { fileURLToPath } from 'node:url'
 import { Router } from 'express'
 import { protect } from '../middleware/auth.js'
+import { scriptDocumentDirectory } from '../config/storage.js'
 
 export const maxScriptUploadBytes = 25 * 1024 * 1024
-export const scriptDocumentDirectory = join(dirname(fileURLToPath(import.meta.url)), '../../storage/scripts')
 
 const supportedDocuments = new Map([
   ['application/pdf', '.pdf'],

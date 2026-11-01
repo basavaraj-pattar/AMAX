@@ -1,15 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { fileURLToPath } from 'node:url'
 import { Router } from 'express'
 import { protect } from '../middleware/auth.js'
+import { filmVideoDirectory } from '../config/storage.js'
 
 export const maxFilmUploadBytes = 500 * 1024 * 1024
-export const filmVideoDirectory = join(dirname(fileURLToPath(import.meta.url)), '../../storage/films')
 
 export function filmUploadSizeGuard(maxBytes = maxFilmUploadBytes) {
   let receivedBytes = 0

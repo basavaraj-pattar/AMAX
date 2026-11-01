@@ -8,10 +8,11 @@ import { OAuth2Client } from 'google-auth-library'
 import User from '../models/User.js'
 import { protect } from '../middleware/auth.js'
 import { mergePreferences, preferenceKeys } from '../services/preferences.js'
+import { runtimeConfig } from '../config/runtime.js'
 
 const router = Router()
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
-const apiClientUrl = (process.env.CLIENT_URL || 'http://localhost:5174').replace(/\/$/, '')
+const apiClientUrl = runtimeConfig.clientAppUrl
 
 function authTokenFor(user) {
   if (!process.env.JWT_SECRET) {

@@ -1,11 +1,10 @@
 import MessageAttachment from '../models/MessageAttachment.js'
 import { rm } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { basename, join } from 'node:path'
+import { messageAttachmentDirectory } from '../config/storage.js'
 
 export const MAX_MESSAGE_ATTACHMENTS = 5
 export const MAX_MESSAGE_ATTACHMENT_BYTES = 50 * 1024 * 1024
-const attachmentDirectory = join(dirname(fileURLToPath(import.meta.url)), '../../storage/message-attachments')
 
 export async function cleanupExpiredMessageAttachments() {
   const now = new Date()
@@ -14,12 +13,22 @@ export async function cleanupExpiredMessageAttachments() {
     { $set: { status: 'expired' } }
   )
   const expired = await MessageAttachment.find({ status: 'expired', expiresAt: { $lte: now } }).select('_id storageName').lean()
+  const removedIds = []
   await Promise.all(expired.map(async attachment => {
-    if (basename(attachment.storageName) === attachment.storageName) {
-      await rm(join(attachmentDirectory, attachment.storageName), { force: true }).catch(() => {})
+    if (basename(attachment.storageName) !== attachment.storageName) {
+      console.error(`Skipping expired attachment with an unsafe storage name: ${attachment._id}`)
+      return
+    }
+    try {
+      await rm(join(messageAttachmentDirectory, attachment.storageName), { force: true })
+      removedIds.push(attachment._id)
+    } catch (error) {
+      console.error(`Unable to remove expired message attachment ${attachment._id}:`, error)
     }
   }))
-  if (expired.length) await MessageAttachment.deleteMany({ _id: { $in: expired.map(attachment => attachment._id) }, status: 'expired' })
+  if (removedIds.length) {
+    await MessageAttachment.deleteMany({ _id: { $in: removedIds }, status: 'expired' })
+  }
 }
 
 export async function resolveMessageAttachments(ownerId, ids) {

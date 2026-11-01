@@ -3,10 +3,9 @@ import mongoose from 'mongoose'
 import { randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
-import { basename, dirname, extname, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 import { Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { fileURLToPath } from 'node:url'
 import Conversation from '../models/Conversation.js'
 import Message from '../models/Message.js'
 import MessageAttachment from '../models/MessageAttachment.js'
@@ -16,12 +15,12 @@ import User from '../models/User.js'
 import { protect } from '../middleware/auth.js'
 import { directConversationKey, validateMessageInput } from '../services/messaging.js'
 import { cleanupExpiredMessageAttachments, markMessageAttachmentsAttached, MAX_MESSAGE_ATTACHMENT_BYTES, resolveMessageAttachments } from '../services/message-attachments.js'
+import { messageAttachmentDirectory } from '../config/storage.js'
 
 const router = Router()
 const MAX_MESSAGE_LENGTH = 2000
 const PAGE_SIZE = 50
 const messageSendWindows = new Map()
-const attachmentDirectory = join(dirname(fileURLToPath(import.meta.url)), '../../storage/message-attachments')
 const allowedAttachmentTypes = {
   '.jpg': ['image', 'image/jpeg'], '.jpeg': ['image', 'image/jpeg'], '.png': ['image', 'image/png'],
   '.gif': ['image', 'image/gif'], '.webp': ['image', 'image/webp'],
@@ -80,10 +79,10 @@ router.post('/attachments', async (req, res, next) => {
 
   const id = randomUUID()
   const storageName = `${id}${extension}`
-  const finalPath = join(attachmentDirectory, storageName)
+  const finalPath = join(messageAttachmentDirectory, storageName)
   const temporaryPath = `${finalPath}.uploading`
   try {
-    await mkdir(attachmentDirectory, { recursive: true })
+    await mkdir(messageAttachmentDirectory, { recursive: true })
     await pipeline(req, attachmentSizeGuard(), createWriteStream(temporaryPath, { flags: 'wx' }))
     const uploaded = await stat(temporaryPath)
     if (!uploaded.size) {
@@ -110,7 +109,7 @@ router.delete('/attachments/:attachmentId', async (req, res, next) => {
       status: 'pending'
     }).select('storageName').lean()
     if (!attachment) return res.status(404).json({ message: 'Attachment not found.' })
-    await rm(join(attachmentDirectory, attachment.storageName), { force: true })
+    await rm(join(messageAttachmentDirectory, attachment.storageName), { force: true })
     res.status(204).end()
   } catch (error) { next(error) }
 })
@@ -129,7 +128,7 @@ router.get('/attachments/:attachmentId', async (req, res, next) => {
     }
     if (!authorized) return res.status(404).json({ message: 'Attachment not found.' })
 
-    const filePath = join(attachmentDirectory, attachment.storageName)
+    const filePath = join(messageAttachmentDirectory, attachment.storageName)
     const file = await stat(filePath).catch(() => null)
     if (!file?.isFile()) return res.status(404).json({ message: 'Attachment file is no longer available.' })
     const safeFallback = attachment.name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_')
@@ -210,15 +209,26 @@ router.get('/conversations', async (req, res, next) => {
       .sort({ lastActivityAt: -1 })
       .limit(100)
       .lean()
-    const result = await Promise.all(conversations.map(async conversation => {
+    const unreadFilters = conversations.map(conversation => {
       const participant = conversation.participants.find(item => String(item.user?._id) === String(req.user._id))
-      const unreadCount = await Message.countDocuments({
+      return {
         conversation: conversation._id,
         sender: { $ne: req.user._id },
         createdAt: { $gt: participant?.lastReadAt || new Date(0) }
-      })
-      return conversationSummary(conversation, req.user._id, unreadCount)
-    }))
+      }
+    })
+    const unreadCounts = unreadFilters.length
+      ? await Message.aggregate([
+          { $match: { $or: unreadFilters } },
+          { $group: { _id: '$conversation', count: { $sum: 1 } } }
+        ])
+      : []
+    const unreadByConversation = new Map(unreadCounts.map(item => [String(item._id), item.count]))
+    const result = conversations.map(conversation => conversationSummary(
+      conversation,
+      req.user._id,
+      unreadByConversation.get(String(conversation._id)) || 0
+    ))
     res.json(result)
   } catch (error) { next(error) }
 })

@@ -23,8 +23,14 @@ test('public filmmaker profiles expose profile details without private account d
     username: 'avadirector',
     role: 'Director · Writer',
     image: 'https://example.com/avatar.jpg',
+    coverImage: '',
+    about: '',
     bio: 'Independent filmmaker',
+    creativeStyle: '',
+    socialLinks: {},
+    filmTaste: [],
     location: 'Mumbai',
+    skills: [],
     followers: 2
   })
   assert.equal('email' in profile, false)
