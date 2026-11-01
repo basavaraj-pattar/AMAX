@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=22 <25"
   },
-  "scripts": { "dev": "node --watch src/server.js", "start": "node src/server.js", "test": "node --test", "migrate:messages": "node src/scripts/create-message-indexes.js", "migrate:engagement": "node src/scripts/create-engagement-indexes.js", "setup:admin": "node src/scripts/setup-admin.js" },
+  "scripts": { "dev": "node --watch src/server.js", "build": "npm test", "start": "node src/server.js", "test": "node --test", "migrate:messages": "node src/scripts/create-message-indexes.js", "migrate:engagement": "node src/scripts/create-engagement-indexes.js", "setup:admin": "node src/scripts/setup-admin.js" },
   "dependencies": {
     "bcryptjs": "latest",
     "cors": "latest",
