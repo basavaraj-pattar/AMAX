@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path'
 
 const LOCAL_CLIENT_URL = 'http://localhost:5174'
+const RENDER_STORAGE_DIR = '/var/data'
 
 function parseClientOrigins(value, production) {
   const configuredOrigins = (value || (production ? '' : LOCAL_CLIENT_URL))
@@ -37,7 +38,8 @@ export function getRuntimeConfig(env = process.env) {
   const production = env.NODE_ENV === 'production'
   const port = Number(env.PORT || 5000)
   const mongoUri = typeof env.MONGO_URI === 'string' ? env.MONGO_URI.trim() : ''
-  const storageDir = typeof env.STORAGE_DIR === 'string' ? env.STORAGE_DIR.trim() : ''
+  const configuredStorageDir = typeof env.STORAGE_DIR === 'string' ? env.STORAGE_DIR.trim() : ''
+  const storageDir = configuredStorageDir || (production ? RENDER_STORAGE_DIR : '')
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('PORT must be an integer between 1 and 65535.')
   }
@@ -50,7 +52,7 @@ export function getRuntimeConfig(env = process.env) {
     if (typeof env.JWT_SECRET !== 'string' || env.JWT_SECRET.trim().length < 32) {
       throw new Error('JWT_SECRET must be at least 32 characters in production.')
     }
-    if (!storageDir || !isAbsolute(storageDir)) {
+    if (!isAbsolute(storageDir)) {
       throw new Error('STORAGE_DIR must be an absolute path on a persistent disk in production.')
     }
   }
@@ -61,7 +63,8 @@ export function getRuntimeConfig(env = process.env) {
     production,
     mongoUri,
     clientOrigins,
-    clientAppUrl: clientOrigins[0] || LOCAL_CLIENT_URL
+    clientAppUrl: clientOrigins[0] || LOCAL_CLIENT_URL,
+    storageDir
   }
 }
 

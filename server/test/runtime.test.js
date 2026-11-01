@@ -8,11 +8,12 @@ test('development runtime keeps local defaults and allows missing persistence', 
     production: false,
     mongoUri: '',
     clientOrigins: ['http://localhost:5174'],
-    clientAppUrl: 'http://localhost:5174'
+    clientAppUrl: 'http://localhost:5174',
+    storageDir: ''
   })
 })
 
-test('production runtime requires durable storage, MongoDB, and a strong session secret', () => {
+test('production runtime requires MongoDB and a strong session secret', () => {
   assert.throws(() => getRuntimeConfig({ NODE_ENV: 'production' }), /MONGO_URI is required/)
   assert.throws(() => getRuntimeConfig({
     NODE_ENV: 'production',
@@ -28,12 +29,13 @@ test('production runtime requires durable storage, MongoDB, and a strong session
     CLIENT_URL: 'https://amax.example',
     STORAGE_DIR: '/var/data'
   }), /JWT_SECRET must be at least 32 characters/)
-  assert.throws(() => getRuntimeConfig({
+  const productionConfig = getRuntimeConfig({
     NODE_ENV: 'production',
     MONGO_URI: 'mongodb+srv://example',
     JWT_SECRET: 'a'.repeat(32),
     CLIENT_URL: 'https://amax.example'
-  }), /STORAGE_DIR must be an absolute path on a persistent disk/)
+  })
+  assert.equal(productionConfig.storageDir, '/var/data')
   assert.throws(() => getRuntimeConfig({
     NODE_ENV: 'production',
     MONGO_URI: 'mongodb+srv://example',
@@ -53,6 +55,7 @@ test('client origins are normalized, deduplicated, and reject paths', () => {
   })
   assert.deepEqual(config.clientOrigins, ['https://amax.example', 'https://studio.amax.example'])
   assert.equal(config.clientAppUrl, 'https://amax.example')
+  assert.equal(config.storageDir, '/var/data')
   assert.throws(() => getRuntimeConfig({
     NODE_ENV: 'production',
     MONGO_URI: 'mongodb+srv://example',

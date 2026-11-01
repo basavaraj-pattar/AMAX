@@ -32,7 +32,7 @@ The repository includes a Render Blueprint in `render.yaml` for the backend serv
 - `JWT_SECRET`: a unique random value of at least 32 characters.
 - `CLIENT_URL`: the deployed frontend origin, or comma-separated origins if more than one frontend is used.
 
-The Blueprint sets `STORAGE_DIR=/var/data` and mounts a persistent disk there. Keep the disk attached: film uploads, scripts, and chat attachments are stored on it and are not recoverable from MongoDB alone. If migrating an existing deployment, copy the contents of `server/storage` to the disk while preserving its `films`, `scripts`, and `message-attachments` subdirectories. The 10 GB disk is a starting point; increase it as uploads grow. Persistent disks require a paid Render web service.
+The backend defaults production uploads to `/var/data`, the Render Blueprint's persistent-disk mount path. The current service must have a persistent disk mounted there; without the disk, uploaded files will not be durable. Keep the disk attached: film uploads, scripts, and chat attachments are stored on it and are not recoverable from MongoDB alone. If migrating an existing deployment, copy the contents of `server/storage` to the disk while preserving its `films`, `scripts`, and `message-attachments` subdirectories. The 10 GB disk is a starting point; increase it as uploads grow. Persistent disks require a paid Render web service.
 
 Render uses `/api/health` as its health check. It reports ready only after MongoDB, indexes, and persistent storage are available. For password-reset email and Google sign-in, also configure the SMTP variables and `GOOGLE_CLIENT_ID` in the Render environment. Configure the frontend's `VITE_API_URL` to the Render API URL plus `/api`.
 
