@@ -8,8 +8,15 @@
  */
 import 'dotenv/config'
 import bcrypt from 'bcryptjs'
+import dns from 'node:dns'
 import mongoose from 'mongoose'
 import AdminAccount from '../models/AdminAccount.js'
+
+const configuredDnsServers = process.env.MONGODB_DNS_SERVERS
+  ?.split(',')
+  .map(server => server.trim())
+  .filter(Boolean)
+if (configuredDnsServers?.length) dns.setServers(configuredDnsServers)
 
 const MONGO_URI = process.env.MONGO_URI
 if (!MONGO_URI) {

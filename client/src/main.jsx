@@ -6,6 +6,7 @@ import GlobalSmoothScroll from './features/GlobalSmoothScroll'
 import 'lenis/dist/lenis.css'
 import './styles.css'
 import './logo-theme.css'
+import './features/ProfileWorkActions.css'
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode><BrowserRouter><GlobalSmoothScroll /><ScrollToTop /><App /></BrowserRouter></React.StrictMode>

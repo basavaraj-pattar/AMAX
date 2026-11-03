@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom'
 import mvLogo from './assets/mv-logo.png'
 import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Bell, BookOpen, Bookmark, Camera, Check, ChevronDown, Compass, ExternalLink, Expand, Film, FileText, Heart, Home as HomeIcon, LogIn, LogOut, MessageCircle, Mic, Minimize2, MoreVertical, Pencil, Play, Plus, Search, ScrollText, Send, Settings, ShoppingBag, SlidersHorizontal, Sparkles, Upload, UserCircle, Users } from 'lucide-react'
+import { Bell, BookOpen, Bookmark, Camera, Check, ChevronDown, Compass, ExternalLink, Expand, Film, FileText, Heart, Home as HomeIcon, LogIn, LogOut, MessageCircle, Mic, Minimize2, MoreVertical, Pencil, Play, Plus, Search, ScrollText, Send, Settings, ShoppingBag, SlidersHorizontal, Sparkles, Trash2, Upload, UserCircle, Users, X } from 'lucide-react'
 import DirectionalChevron from './components/DirectionalChevron'
 import { AuthSessionProvider, RequireAuth, useAuthSession } from './context/AuthSession'
 import { Onboarding, PreferenceSettings } from './features/Preferences'
@@ -120,6 +120,18 @@ function readPublishedItems(key) {
     console.error(`Unable to read published content from ${key}:`, error)
   }
   return []
+}
+
+function isOwnedLocalWork(item, user) {
+  const userId = String(user?._id || user?.id || '')
+  const ownerId = String(item?.ownerId || item?.creatorId || item?.sellerId || '')
+  const username = String(user?.username || '').toLowerCase()
+  const ownerUsername = String(item?.ownerUsername || item?.creatorUsername || item?.sellerUsername || '').toLowerCase()
+  return Boolean((userId && ownerId && ownerId === userId) || (username && ownerUsername && ownerUsername === username))
+}
+
+function workRecordKey(item) {
+  return String(item?.contentId || item?.id || item?.localId || '')
 }
 
 function notifyPublishedContent() {
@@ -1046,8 +1058,8 @@ function Shell({ children, homePreview = false }) {
       setVoiceSearchError('Voice search could not start. Please try again.')
     }
   }
-  const localFilms = (() => { try { return JSON.parse(localStorage.getItem('a-max-published-films') || '[]') } catch { return [] } })()
-  const localScripts = (() => { try { return JSON.parse(localStorage.getItem('a-max-published-scripts') || '[]').filter(item => item.contentId) } catch { return [] } })()
+  const localFilms = (() => { try { return JSON.parse(localStorage.getItem('a-max-published-films') || '[]').filter(item => !item.contentId) } catch { return [] } })()
+  const localScriptCache = (() => { try { return JSON.parse(localStorage.getItem('a-max-published-scripts') || '[]') } catch { return [] } })()
   const navProfile = {
     name: user?.name || navbarProfile?.name || 'Arjun Mehta',
     role: isFilmmaker ? (navbarProfile?.role && navbarProfile.role !== 'Cinephile' ? navbarProfile.role : 'Filmmaker') : isCinephile ? 'Cinephile' : (navbarProfile?.role || 'Director · Writer'),
@@ -1073,7 +1085,11 @@ function Shell({ children, homePreview = false }) {
         }
         if (active) {
           setRemoteFilmResults(serverFilms.map(mapApiFilm))
-          setRemoteScriptResults([...serverScripts, ...serverStories].map(mapApiScript))
+          setRemoteScriptResults([...serverScripts, ...serverStories].map(item => {
+            const mapped = mapApiScript(item)
+            const cached = localScriptCache.find(script => String(script.contentId) === String(mapped.contentId))
+            return cached ? { ...cached, ...mapped, documentKey: cached.documentKey, imageKey: cached.imageKey } : mapped
+          }))
         }
       } catch (error) {
         if (active) console.error('Unable to search published content:', error)
@@ -1096,7 +1112,7 @@ function Shell({ children, homePreview = false }) {
   const searchResults = query ? [
     ...creators.filter(creator => `${creator.name} ${creator.name.toLowerCase().replace(/\s+/g, '-')}`.toLowerCase().includes(query)).map(creator => ({ kind: 'Filmmaker', title: creator.name, detail: creator.role, image: creator.image, path: `/profile/${creator.name.toLowerCase().replace(/\s+/g, '-')}` })),
     ...allFilmsForSearch.filter(film => `${film.title} ${film.creator} ${film.genre || ''}`.toLowerCase().includes(query)).map(film => ({ kind: 'Film', title: film.title, detail: film.creator || 'AMAX Filmmaker', image: film.image || films[0].image, path: film.contentId ? `/?film=${encodeURIComponent(film.contentId)}` : `/explore?search=${encodeURIComponent(film.title)}` })),
-    ...[...localScripts, ...remoteScriptResults].filter(script => `${script.title} ${script.creator}`.toLowerCase().includes(query)).map(script => ({ kind: 'Script / Story', title: script.title, detail: script.creator, image: script.image, path: `/explore?section=scripts&search=${encodeURIComponent(script.title)}` })),
+    ...remoteScriptResults.filter(script => `${script.title} ${script.creator}`.toLowerCase().includes(query)).map(script => ({ kind: 'Script / Story', title: script.title, detail: script.creator, image: script.image, path: `/explore?section=scripts&search=${encodeURIComponent(script.title)}` })),
   ].slice(0, 6) : []
   const chooseFilm = event => {
     const file = event.target.files?.[0]
@@ -1452,7 +1468,7 @@ function setStoredFilmLikeCount(film, count) {
   } catch {}
 }
 
-function FilmCard({ film, wide = false, showAccent = true, profileContext = false }) {
+function FilmCard({ film, wide = false, showAccent = true, profileContext = false, manageActions = false, onEditWork, onDeleteWork }) {
   const { user } = useAuthSession()
   const [searchParams, setSearchParams] = useSearchParams()
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -1557,7 +1573,7 @@ function FilmCard({ film, wide = false, showAccent = true, profileContext = fals
 
   return <>
     <article className={`film-card ${wide ? 'wide' : ''}`} onClick={openDetails} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDetails() } }} role="button" tabIndex="0" aria-label={`View ${film.title}`}>
-      <div className="film-image"><MediaImage image={film.image} imageKey={film.imageKey} alt={`${film.title} poster`}/>{showAccent && film.accent && film.accent !== 'Community release' && <span className="film-accent">{film.accent}</span>}<button className="play-button" aria-label={`Watch ${film.title}`} onClick={event => { event.stopPropagation(); openDetails() }}><Play size={15} fill="currentColor"/></button><button className={`heart-button ${liked ? 'liked' : ''}`} aria-label={liked ? `Unlike ${film.title}` : `Like ${film.title}`} aria-pressed={liked} onClick={toggleLike} title={liked ? `Liked (${likeCount})` : `Like (${likeCount})`}><Heart size={17} fill={liked ? 'currentColor' : 'none'}/></button></div>
+      <div className="film-image"><MediaImage image={film.image} imageKey={film.imageKey} alt={`${film.title} poster`}/>{showAccent && film.accent && film.accent !== 'Community release' && <span className="film-accent">{film.accent}</span>}{manageActions && <WorkItemActions onEdit={event => onEditWork?.(film, event)} onDelete={event => onDeleteWork?.(film, event)}/>}<button className="play-button" aria-label={`Watch ${film.title}`} onClick={event => { event.stopPropagation(); openDetails() }}><Play size={15} fill="currentColor"/></button><button className={`heart-button ${liked ? 'liked' : ''}`} aria-label={liked ? `Unlike ${film.title}` : `Like ${film.title}`} aria-pressed={liked} onClick={toggleLike} title={liked ? `Liked (${likeCount})` : `Like (${likeCount})`}><Heart size={17} fill={liked ? 'currentColor' : 'none'}/></button></div>
       <div className="film-meta"><div><h3>{film.title}</h3><small>{film.genre}</small></div></div>
     </article>
     {likeError && !detailsOpen && <p className="film-card-error" role="alert">{likeError}</p>}
@@ -1711,7 +1727,7 @@ function ScriptReader({ script, saved, savedCount, saving, saveError, onToggleBo
   return createPortal(<div className="script-viewer-backdrop" role="dialog" aria-modal="true" aria-label={`${script.title} reader`}><section ref={viewerRef} className={`script-viewer${immersive ? ' is-immersive' : ''}`}><header className="script-viewer-header"><Link className="script-writer-profile" to={writer.to} onClick={onClose}><img src={writer.image} alt=""/><span><small>WRITTEN BY</small><strong>{writer.name}</strong></span></Link><div className="script-reader-title"><span className="eyebrow warm">READING NOW</span><h1>{script.title}</h1><p>{script.type}</p></div><div className="script-reader-actions">{script.contentId && <button className={`script-reader-save ${saved ? 'saved' : ''}`} disabled={saving} aria-pressed={saved} onClick={onToggleBookmark}><Bookmark size={15} fill={saved ? 'currentColor' : 'none'}/><span>{saving ? 'Saving…' : `${savedCount} saves`}</span></button>}<button className="script-reader-immersive" onClick={toggleImmersive} aria-label="Enter immersive reading mode" title="Immersive reading"><Expand size={18}/></button><button className="script-viewer-close" onClick={onClose} aria-label="Close script reader" title="Close reader"><span aria-hidden="true">×</span></button></div></header>{saveError && <p className="script-save-error script-reader-save-error" role="alert">{saveError}</p>}{immersive && immersiveFallback && <button className="script-immersive-exit" onClick={exitImmersive} aria-label="Exit immersive reading mode" title="Exit immersive reading"><Minimize2 size={18}/></button>}<div className="script-viewer-page">{documentKind === 'pdf' && documentUrl ? <iframe className="script-document-frame" src={pdfViewerUrl} title={`${script.title} uploaded PDF`} /> : documentKind === 'text' ? <article className="script-document script-document-text">{documentContent}</article> : documentKind === 'unsupported' ? <div className="script-document-empty" role="status"><strong>Preview unavailable</strong><p>This legacy Word document can’t be previewed. Ask the writer to upload a PDF.</p></div> : <div className="script-document-empty" role={documentKind === 'error' ? 'alert' : 'status'}>{documentError || 'Loading uploaded document…'}</div>}</div></section></div>, document.body)
 }
 
-function ScriptCard({ script, profileContext = false }) {
+function ScriptCard({ script, profileContext = false, manageActions = false, onEditWork, onDeleteWork }) {
   const { user } = useAuthSession()
   const { toggleBookmark, isBookmarked, getSavedCount } = useBookmarks()
   const navigate = useNavigate()
@@ -1778,7 +1794,7 @@ function ScriptCard({ script, profileContext = false }) {
   }
 
   return <>
-    <article className="script-card" onClick={openReader} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openReader() } }} role="button" tabIndex="0" aria-label={`Read ${script.title}${pageCount ? `, ${pageCount} pages` : ''}`}>
+    <article className={`script-card${manageActions ? ' has-work-actions' : ''}`} onClick={openReader} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openReader() } }} role="button" tabIndex="0" aria-label={`Read ${script.title}${pageCount ? `, ${pageCount} pages` : ''}`}>
       <div className="script-card-cover"><MediaImage image={script.image} imageKey={script.imageKey} alt={`${script.title} cover`}/>{pageCount > 0 && <span className="script-page-count">{pageCount} {pageCount === 1 ? 'page' : 'pages'}</span>}</div>
       <div className="script-card-copy">
         <h3>{script.title}</h3>
@@ -1790,10 +1806,40 @@ function ScriptCard({ script, profileContext = false }) {
       <button className={`script-bookmark-button ${saved ? 'saved' : ''}`} disabled={saving || !script.contentId} aria-label={saving ? `Saving ${script.title}` : saved ? `Remove ${script.title} from saved items` : `Save ${script.title}`} title={saved ? 'Saved' : 'Save'} aria-pressed={saved} onClick={save}>
         <Bookmark size={16} fill={saved ? 'currentColor' : 'none'}/>
       </button>
+      {manageActions && <WorkItemActions onEdit={event => onEditWork?.(script, event)} onDelete={event => onDeleteWork?.(script, event)}/>}
       {saveError && <span className="script-save-error" role="alert">{saveError}</span>}
     </article>
     {readerOpen && <ScriptReader script={script} saved={saved} savedCount={savedCount} saving={saving} saveError={saveError} onToggleBookmark={save} onClose={closeReader}/>}
   </>
+}
+
+function WorkItemActions({ onEdit, onDelete, inline = false }) {
+  const [open, setOpen] = useState(false)
+  const menuRef = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    const dismiss = event => { if (!menuRef.current?.contains(event.target)) setOpen(false) }
+    const dismissOnEscape = event => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', dismissOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', dismiss)
+      document.removeEventListener('keydown', dismissOnEscape)
+    }
+  }, [open])
+  const stop = callback => event => {
+    event.preventDefault()
+    event.stopPropagation()
+    callback?.(event)
+    setOpen(false)
+  }
+  return <div className={`work-item-actions${inline ? ' is-inline' : ''}`} ref={menuRef} onClick={event => event.stopPropagation()}>
+    <button className="work-item-menu-trigger" type="button" aria-label="Work item options" aria-haspopup="menu" aria-expanded={open} title="Work item options" onClick={event => { event.preventDefault(); event.stopPropagation(); setOpen(value => !value) }}><MoreVertical size={17}/></button>
+    {open && <div className="work-item-menu" role="menu">
+      <button type="button" role="menuitem" onClick={stop(onEdit)}><Pencil size={14}/> Edit</button>
+      <button type="button" role="menuitem" className="is-destructive" onClick={stop(onDelete)}><Trash2 size={14}/> Delete</button>
+    </div>}
+  </div>
 }
 
 function EquipmentCard({ item }) { return <Link className="equipment-card" to={`/marketplace/${item.id}`}><div><MediaImage image={item.image} imageKey={item.imageKey} alt={item.title}/></div><div className="equipment-meta"><h3>{item.title}</h3><small>{item.category}</small><strong>{listingPrice(item)}</strong></div></Link> }
@@ -1864,7 +1910,7 @@ function MarketplacePage() {
         const localListings = marketplaceListings()
         const serverItems = items.map(mapApiEquipment)
         const serverIds = new Set(serverItems.map(item => item.id))
-        setListingsSource([...serverItems, ...localListings.filter(item => !serverIds.has(item.id))])
+        setListingsSource([...serverItems, ...localListings.filter(item => !serverIds.has(item.id) && !/^[a-f\d]{24}$/i.test(String(item.id)))])
       })
       .catch(error => {
         if (active) setLoadError(error.message || 'Unable to load marketplace listings.')
@@ -1879,11 +1925,17 @@ function MarketplacePage() {
     const handleListingRemoved = event => {
       setListingsSource(current => current.filter(item => item.id !== event.listingId))
     }
+    const handleListingUpdated = updatedListing => {
+      const mapped = mapApiEquipment(updatedListing)
+      setListingsSource(current => current.map(item => item.id === mapped.id ? mapped : item))
+    }
     socket?.on('equipment:listing:created', handleListingCreated)
     socket?.on('equipment:listing:removed', handleListingRemoved)
+    socket?.on('equipment:listing:updated', handleListingUpdated)
     return () => {
       socket?.off('equipment:listing:created', handleListingCreated)
       socket?.off('equipment:listing:removed', handleListingRemoved)
+      socket?.off('equipment:listing:updated', handleListingUpdated)
     }
   }, [socket])
   const listings = listingsSource.filter(item => {
@@ -2264,9 +2316,9 @@ function Home({ preview = false }) {
     let active = true
     const refreshPublishedContent = async () => {
       const localFilms = readPublishedItems('a-max-published-films')
-      const localScripts = readPublishedItems('a-max-published-scripts').filter(script => script.contentId)
-      setHomeFilms([...localFilms, ...films])
-      setHomeScripts(localScripts)
+      const localScripts = readPublishedItems('a-max-published-scripts')
+      setHomeFilms([...localFilms.filter(film => !film.contentId), ...films])
+      setHomeScripts(localScripts.filter(script => !script.contentId))
       setHomeEquipment(marketplaceListings())
       try {
         const marketplace = await apiRequest('/equipment')
@@ -2274,7 +2326,7 @@ function Home({ preview = false }) {
         if (!active) return
         const serverEquipment = marketplace.map(mapApiEquipment)
         const serverIds = new Set(serverEquipment.map(item => item.id))
-        setHomeEquipment([...serverEquipment, ...marketplaceListings().filter(item => !serverIds.has(item.id))])
+        setHomeEquipment([...serverEquipment, ...marketplaceListings().filter(item => !serverIds.has(String(item.id)) && !/^[a-f\d]{24}$/i.test(String(item.id)))])
       } catch (error) {
         console.error('Unable to load equipment listings from the server:', error)
       }
@@ -2287,17 +2339,15 @@ function Home({ preview = false }) {
           const localFilm = localFilms.find(film => film.contentId === apiFilm.contentId)
           if (!localFilm) return apiFilm
           return {
-            ...apiFilm,
             ...localFilm,
+            ...apiFilm,
             contentId: apiFilm.contentId,
-            creator: apiFilm.creator || localFilm.creator,
-            image: item.posterUrl || localFilm.image,
             video: apiFilm.video || localFilm.video,
-            videoKey: localFilm.videoKey
+            videoKey: localFilm.videoKey,
+            imageKey: localFilm.imageKey
           }
         })
-        const apiIds = new Set(apiFilms.map(film => film.contentId))
-        setHomeFilms([...localFilms.filter(film => !apiIds.has(film.contentId)), ...apiFilms, ...films])
+        setHomeFilms([...localFilms.filter(film => !film.contentId), ...apiFilms, ...films])
       } catch (error) {
         console.error('Unable to load published films from the server:', error)
       }
@@ -2315,8 +2365,7 @@ function Home({ preview = false }) {
           const localScript = localScripts.find(script => script.contentId === apiScript.contentId)
           return localScript ? { ...localScript, ...apiScript, documentKey: localScript.documentKey, imageKey: localScript.imageKey } : apiScript
         })
-        const serverIds = new Set(mappedScripts.map(script => script.contentId))
-        setHomeScripts([...localScripts.filter(script => !serverIds.has(script.contentId)), ...mappedScripts])
+        setHomeScripts([...localScripts.filter(script => !script.contentId), ...mappedScripts])
       } catch (error) {
         console.error('Unable to load published scripts and stories from the server:', error)
       }
@@ -2334,10 +2383,17 @@ function Home({ preview = false }) {
       } catch {}
       setHomeEquipment(current => current.filter(item => item.id !== event.listingId))
     }
+    const handleListingUpdated = updatedListing => {
+      const mapped = mapApiEquipment(updatedListing)
+      setHomeEquipment(current => current.map(item => item.id === mapped.id ? mapped : item))
+    }
     window.addEventListener('amax:equipment-listing-updated', refreshPublishedContent)
     socket?.on('equipment:listing:created', handleListingCreated)
     socket?.on('equipment:listing:removed', handleListingRemoved)
+    socket?.on('equipment:listing:updated', handleListingUpdated)
     socket?.on('content:published', refreshPublishedContent)
+    socket?.on('content:updated', refreshPublishedContent)
+    socket?.on('content:removed', refreshPublishedContent)
     refreshPublishedContent()
     return () => {
       active = false
@@ -2346,7 +2402,10 @@ function Home({ preview = false }) {
       window.removeEventListener('amax:equipment-listing-updated', refreshPublishedContent)
       socket?.off('equipment:listing:created', handleListingCreated)
       socket?.off('equipment:listing:removed', handleListingRemoved)
+      socket?.off('equipment:listing:updated', handleListingUpdated)
       socket?.off('content:published', refreshPublishedContent)
+      socket?.off('content:updated', refreshPublishedContent)
+      socket?.off('content:removed', refreshPublishedContent)
     }
   }, [socket])
 
@@ -2503,20 +2562,17 @@ function Explore() {
   const search = params.get('search')?.trim().toLowerCase() || ''
   const section = params.get('section') || ''
   const category = section || 'for-you'
-  const localFilms = (() => { try { return JSON.parse(localStorage.getItem('a-max-published-films') || '[]') } catch { return [] } })()
+  const localFilmCache = (() => { try { return JSON.parse(localStorage.getItem('a-max-published-films') || '[]') } catch { return [] } })()
+  const localFilms = localFilmCache.filter(item => !item.contentId)
   const localScripts = (() => { try { return JSON.parse(localStorage.getItem('a-max-published-scripts') || '[]').filter(item => item.contentId) } catch { return [] } })()
 
   const exploreFilms = (() => {
     const map = new Map()
-    localFilms.forEach(f => map.set(f.contentId || f.localId || f.id || f.title, f))
+    localFilms.forEach(f => map.set(f.localId || f.id || f.title, f))
     serverFilms.forEach(f => {
       const key = f.contentId || f.id || f.title
-      if (map.has(key)) {
-        const local = map.get(key)
-        map.set(key, { ...f, ...local, contentId: f.contentId, video: f.video || local.video })
-      } else {
-        map.set(key, f)
-      }
+      const local = localFilmCache.find(item => item.contentId && String(item.contentId) === String(f.contentId))
+      map.set(key, local ? { ...local, ...f, video: f.video || local.video, videoKey: local.videoKey, imageKey: local.imageKey } : f)
     })
     films.forEach(f => {
       const key = f.id || f.title
@@ -2616,11 +2672,15 @@ function Explore() {
     window.addEventListener('amax:published-content', handleRefresh)
     window.addEventListener('storage', handleRefresh)
     socket?.on('content:published', handleRefresh)
+    socket?.on('content:updated', handleRefresh)
+    socket?.on('content:removed', handleRefresh)
     return () => {
       active = false
       window.removeEventListener('amax:published-content', handleRefresh)
       window.removeEventListener('storage', handleRefresh)
       socket?.off('content:published', handleRefresh)
+      socket?.off('content:updated', handleRefresh)
+      socket?.off('content:removed', handleRefresh)
     }
   }, [socket])
 
@@ -2644,10 +2704,11 @@ function Explore() {
   useEffect(() => {
     if (category !== 'scripts' && category !== 'for-you' && !search) return undefined
     let active = true
-    setLoadingScripts(true)
-    setScriptLoadError('')
-    Promise.all([apiRequest('/content?type=script'), apiRequest('/content?type=story')])
-      .then(([serverScripts, serverStories]) => {
+    const loadScripts = async () => {
+      setLoadingScripts(true)
+      setScriptLoadError('')
+      try {
+        const [serverScripts, serverStories] = await Promise.all([apiRequest('/content?type=script'), apiRequest('/content?type=story')])
         if (!Array.isArray(serverScripts) || !Array.isArray(serverStories)) {
           throw new Error('Published scripts and stories response is invalid.')
         }
@@ -2657,15 +2718,26 @@ function Explore() {
           const localScript = localScripts.find(script => script.contentId === apiScript.contentId)
           return localScript ? { ...localScript, ...apiScript, documentKey: localScript.documentKey, imageKey: localScript.imageKey } : apiScript
         })
-        const serverIds = new Set(mapped.map(script => script.contentId))
-        setPublishedScripts([...localScripts.filter(script => !serverIds.has(script.contentId)), ...mapped])
-      })
-      .catch(error => {
+        setPublishedScripts(mapped)
+      } catch (error) {
         if (active) setScriptLoadError(error.message || 'Unable to load published scripts and stories.')
-      })
-      .finally(() => { if (active) setLoadingScripts(false) })
-    return () => { active = false }
-  }, [category, search])
+      } finally { if (active) setLoadingScripts(false) }
+    }
+    loadScripts()
+    window.addEventListener('amax:published-content', loadScripts)
+    window.addEventListener('storage', loadScripts)
+    socket?.on('content:published', loadScripts)
+    socket?.on('content:updated', loadScripts)
+    socket?.on('content:removed', loadScripts)
+    return () => {
+      active = false
+      window.removeEventListener('amax:published-content', loadScripts)
+      window.removeEventListener('storage', loadScripts)
+      socket?.off('content:published', loadScripts)
+      socket?.off('content:updated', loadScripts)
+      socket?.off('content:removed', loadScripts)
+    }
+  }, [category, search, socket])
 
   useEffect(() => {
     if (category !== 'equipment' && category !== 'for-you' && !search) return undefined
@@ -2679,7 +2751,7 @@ function Explore() {
         if (!active) return
         const serverItems = response.map(mapApiEquipment)
         const serverIds = new Set(serverItems.map(item => String(item.id)))
-        setExploreEquipment([...serverItems, ...marketplaceListings().filter(item => !serverIds.has(String(item.id)))])
+        setExploreEquipment([...serverItems, ...marketplaceListings().filter(item => !serverIds.has(String(item.id)) && !/^[a-f\d]{24}$/i.test(String(item.id)))])
       } catch (error) {
         if (active) setEquipmentLoadError(error.message || 'Unable to load marketplace listings.')
       } finally {
@@ -2692,12 +2764,14 @@ function Explore() {
     window.addEventListener('storage', refresh)
     socket?.on('equipment:listing:created', refresh)
     socket?.on('equipment:listing:removed', refresh)
+    socket?.on('equipment:listing:updated', refresh)
     return () => {
       active = false
       window.removeEventListener('amax:equipment-listing-updated', refresh)
       window.removeEventListener('storage', refresh)
       socket?.off('equipment:listing:created', refresh)
       socket?.off('equipment:listing:removed', refresh)
+      socket?.off('equipment:listing:updated', refresh)
     }
   }, [category, search, socket])
 
@@ -2777,7 +2851,7 @@ function LegacyProfileView() {
 function ProfileView() {
   const { username } = useParams()
   const navigate = useNavigate()
-  const { user, setUser, clearSession } = useAuthSession()
+  const { user, setUser, clearSession, socket } = useAuthSession()
   const isFilmmaker = Boolean(user && user.preferences?.primaryIdentity === 'filmmaker')
   if (!isFilmmaker) {
     return <Navigate to="/" replace />
@@ -2821,10 +2895,18 @@ function ProfileView() {
   const [filmTasteSaving, setFilmTasteSaving] = useState(false)
   const [filmTasteMessage, setFilmTasteMessage] = useState('')
   const [filmTastePosterError, setFilmTastePosterError] = useState('')
+  const [workEditor, setWorkEditor] = useState(null)
+  const [workDraft, setWorkDraft] = useState({ image: '', description: '' })
+  const [workImageChanged, setWorkImageChanged] = useState(false)
+  const [workSaving, setWorkSaving] = useState(false)
+  const [workSaveError, setWorkSaveError] = useState('')
+  const [workDeleteTarget, setWorkDeleteTarget] = useState(null)
+  const [workDeleting, setWorkDeleting] = useState(false)
+  const [workDeleteError, setWorkDeleteError] = useState('')
 
-  const [userFilms, setUserFilms] = useState(() => isOwnProfile ? readPublishedItems('a-max-published-films') : [])
-  const [userScripts, setUserScripts] = useState(() => isOwnProfile ? readPublishedItems('a-max-published-scripts').filter(item => item.contentId) : [])
-  const [userEquipment, setUserEquipment] = useState(() => isOwnProfile ? readPublishedItems('a-max-published-equipment') : [])
+  const [userFilms, setUserFilms] = useState(() => isOwnProfile ? readPublishedItems('a-max-published-films').filter(item => isOwnedLocalWork(item, user)) : [])
+  const [userScripts, setUserScripts] = useState(() => isOwnProfile ? readPublishedItems('a-max-published-scripts').filter(item => isOwnedLocalWork(item, user)) : [])
+  const [userEquipment, setUserEquipment] = useState(() => isOwnProfile ? readPublishedItems('a-max-published-equipment').filter(item => isOwnedLocalWork(item, user)) : [])
 
   useEffect(() => {
     if (isOwnProfile || !username) return undefined
@@ -2856,10 +2938,47 @@ function ProfileView() {
   }, [profileMenuOpen])
 
   const loadWork = async () => {
+    const localFilms = isOwnProfile ? readPublishedItems('a-max-published-films').filter(item => isOwnedLocalWork(item, user)) : []
+    const localScripts = isOwnProfile ? readPublishedItems('a-max-published-scripts').filter(item => isOwnedLocalWork(item, user)) : []
+    const localEquipment = isOwnProfile ? readPublishedItems('a-max-published-equipment').filter(item => isOwnedLocalWork(item, user)) : []
     try {
-      const localFilms = isOwnProfile ? readPublishedItems('a-max-published-films') : []
-      const localScripts = isOwnProfile ? readPublishedItems('a-max-published-scripts').filter(item => item.contentId) : []
-      const localEquipment = isOwnProfile ? readPublishedItems('a-max-published-equipment') : []
+      if (isOwnProfile) {
+        const [contentResult, equipmentResult] = await Promise.allSettled([
+          apiRequest('/content/mine'),
+          apiRequest('/equipment/mine')
+        ])
+        const serverContentAvailable = contentResult.status === 'fulfilled' && Array.isArray(contentResult.value)
+        const serverEquipmentAvailable = equipmentResult.status === 'fulfilled' && Array.isArray(equipmentResult.value)
+        const rawContent = serverContentAvailable ? contentResult.value : []
+        const cachedByContentId = new Map([...localFilms, ...localScripts].filter(item => item.contentId).map(item => [String(item.contentId), item]))
+        const ownFilms = rawContent.filter(item => item.type === 'film').map(item => {
+          const mapped = mapApiFilm(item)
+          const cached = cachedByContentId.get(String(item._id))
+          return cached ? { ...cached, ...mapped, video: mapped.video || cached.video, videoKey: cached.videoKey, imageKey: cached.imageKey } : mapped
+        })
+        const ownScripts = rawContent.filter(item => item.type === 'script' || item.type === 'story').map(item => {
+          const mapped = mapApiScript(item)
+          const cached = cachedByContentId.get(String(item._id))
+          return cached ? { ...cached, ...mapped, documentKey: cached.documentKey, imageKey: cached.imageKey } : mapped
+        })
+        setUserFilms([
+          ...ownFilms,
+          ...localFilms.filter(item => !item.contentId && workRecordKey(item))
+        ].filter((item, index, all) => all.findIndex(other => workRecordKey(other) === workRecordKey(item)) === index))
+        setUserScripts([
+          ...ownScripts,
+          ...localScripts.filter(item => !item.contentId && workRecordKey(item))
+        ].filter((item, index, all) => all.findIndex(other => workRecordKey(other) === workRecordKey(item)) === index))
+        if (serverEquipmentAvailable) {
+          const serverListings = equipmentResult.value.map(mapApiEquipment)
+          const serverIds = new Set(serverListings.map(item => String(item.id)))
+          setUserEquipment([...serverListings, ...localEquipment.filter(item => !/^[a-f\d]{24}$/i.test(String(item.id || '')) && !serverIds.has(String(item.id)))])
+        } else {
+          setUserEquipment(localEquipment.filter(item => !/^[a-f\d]{24}$/i.test(String(item.id || ''))))
+        }
+        if (!serverContentAvailable || !serverEquipmentAvailable) console.warn('Some profile work could not be verified with the server; showing only account-owned local drafts.')
+        return
+      }
 
       const [apiFilmsRes, apiScriptsRes, apiStoriesRes, apiEquipRes] = await Promise.allSettled([
         apiRequest('/content?type=film'),
@@ -2867,106 +2986,180 @@ function ProfileView() {
         apiRequest('/content?type=story'),
         apiRequest('/equipment')
       ])
-
       const rawFilms = apiFilmsRes.status === 'fulfilled' && Array.isArray(apiFilmsRes.value) ? apiFilmsRes.value : []
       const rawScripts = [
         ...(apiScriptsRes.status === 'fulfilled' && Array.isArray(apiScriptsRes.value) ? apiScriptsRes.value : []),
         ...(apiStoriesRes.status === 'fulfilled' && Array.isArray(apiStoriesRes.value) ? apiStoriesRes.value : [])
       ]
-      const rawEquipment = apiEquipRes.status === 'fulfilled' && Array.isArray(apiEquipRes.value) ? apiEquipRes.value : []
-
-      // Filter films for this user
-      const filteredApiFilms = rawFilms.filter(f => {
-        if (isOwnProfile) {
-          const creatorObj = typeof f.creator === 'object' ? f.creator : null
-          return (user?._id && (creatorObj?._id === user._id || f.creator === user._id)) ||
-                 (user?.username && creatorObj?.username === user.username) ||
-                 (user?.name && (creatorObj?.name === user.name || f.creator === user.name)) ||
-                 (profile.name && (creatorObj?.name === profile.name || f.creator === profile.name))
-        }
-        const creatorObj = typeof f.creator === 'object' ? f.creator : null
-        return (username && (creatorObj?.username === username || creatorObj?.name?.toLowerCase().replace(/\s+/g, '-') === username)) ||
-               (profile.name && (creatorObj?.name === profile.name || f.creator === profile.name))
-      }).map(mapApiFilm)
-
-      // Merge local and API films without duplicates
-      const filmMap = new Map()
-      localFilms.forEach(f => {
-        const key = f.contentId || f.localId || f.id || f.title
-        filmMap.set(key, f)
-      })
-      filteredApiFilms.forEach(f => {
-        const key = f.contentId || f.id || f.title
-        if (!filmMap.has(key)) filmMap.set(key, f)
-      })
-      setUserFilms(Array.from(filmMap.values()))
-
-      // Filter scripts for this user
-      const filteredApiScripts = rawScripts.filter(s => {
-        if (isOwnProfile) {
-          const creatorObj = typeof s.creator === 'object' ? s.creator : null
-          return (user?._id && (creatorObj?._id === user._id || s.creator === user._id)) ||
-                 (user?.username && (creatorObj?.username === user.username || s.creatorUsername === user.username)) ||
-                 (user?.name && (creatorObj?.name === user.name || s.creator === user.name)) ||
-                 (profile.name && (creatorObj?.name === profile.name || s.creator === profile.name))
-        }
-        const creatorObj = typeof s.creator === 'object' ? s.creator : null
-        return (username && (creatorObj?.username === username || s.creatorUsername === username || creatorObj?.name?.toLowerCase().replace(/\s+/g, '-') === username)) ||
-               (profile.name && (creatorObj?.name === profile.name || s.creator === profile.name))
-      }).map(mapApiScript)
-
-      const scriptMap = new Map()
-      localScripts.forEach(s => {
-        const key = s.contentId || s.id || s.title
-        scriptMap.set(key, s)
-      })
-      filteredApiScripts.forEach(s => {
-        const key = s.contentId || s.id || s.title
-        if (!scriptMap.has(key)) scriptMap.set(key, s)
-      })
-      setUserScripts(Array.from(scriptMap.values()))
-
-      // Filter equipment for this user
-      const filteredApiEquip = rawEquipment.filter(item => {
-        if (isOwnProfile) {
-          return (user?._id && (String(item.sellerId) === String(user._id))) ||
-                 (user?.id && (String(item.sellerId) === String(user.id))) ||
-                 (user?.username && item.sellerUsername === user.username) ||
-                 (user?.name && item.seller === user.name) ||
-                 (profile.name && item.seller === profile.name) ||
-                 item.seller === 'You'
-        }
-        return (username && (item.sellerUsername === username || item.seller?.toLowerCase().replace(/\s+/g, '-') === username)) ||
-               (profile.name && item.seller === profile.name)
-      }).map(mapApiEquipment)
-
-      const equipMap = new Map()
-      localEquipment.forEach(item => {
-        const key = item.id || item.title
-        equipMap.set(key, item)
-      })
-      filteredApiEquip.forEach(item => {
-        const key = item.id || item.title
-        if (!equipMap.has(key)) equipMap.set(key, item)
-      })
-      setUserEquipment(Array.from(equipMap.values()))
+      const filmsForProfile = rawFilms.filter(item => typeof item.creator === 'object' && item.creator?.username === username).map(mapApiFilm)
+      const scriptsForProfile = rawScripts.filter(item => typeof item.creator === 'object' && item.creator?.username === username).map(mapApiScript)
+      const equipmentForProfile = (apiEquipRes.status === 'fulfilled' && Array.isArray(apiEquipRes.value) ? apiEquipRes.value : [])
+        .filter(item => item.sellerUsername === username).map(mapApiEquipment)
+      setUserFilms(filmsForProfile)
+      setUserScripts(scriptsForProfile)
+      setUserEquipment(equipmentForProfile)
     } catch (err) {
       console.warn('Unable to refresh user work:', err)
     }
   }
 
   useEffect(() => {
+    setUserFilms(isOwnProfile ? readPublishedItems('a-max-published-films').filter(item => isOwnedLocalWork(item, user)) : [])
+    setUserScripts(isOwnProfile ? readPublishedItems('a-max-published-scripts').filter(item => isOwnedLocalWork(item, user)) : [])
+    setUserEquipment(isOwnProfile ? readPublishedItems('a-max-published-equipment').filter(item => isOwnedLocalWork(item, user)) : [])
     loadWork()
     const handleUpdate = () => loadWork()
     window.addEventListener('amax:published-content', handleUpdate)
     window.addEventListener('amax:equipment-listing-updated', handleUpdate)
     window.addEventListener('storage', handleUpdate)
+    socket?.on('content:published', handleUpdate)
+    socket?.on('content:updated', handleUpdate)
+    socket?.on('content:removed', handleUpdate)
+    socket?.on('equipment:listing:updated', handleUpdate)
+    socket?.on('equipment:listing:removed', handleUpdate)
     return () => {
       window.removeEventListener('amax:published-content', handleUpdate)
       window.removeEventListener('amax:equipment-listing-updated', handleUpdate)
       window.removeEventListener('storage', handleUpdate)
+      socket?.off('content:published', handleUpdate)
+      socket?.off('content:updated', handleUpdate)
+      socket?.off('content:removed', handleUpdate)
+      socket?.off('equipment:listing:updated', handleUpdate)
+      socket?.off('equipment:listing:removed', handleUpdate)
     }
-  }, [username, user?._id, profile.name])
+  }, [username, user?._id, user?.id, user?.username, profile.name, socket])
+
+  useEffect(() => {
+    if (!workEditor && !workDeleteTarget) return undefined
+    const dismissOnEscape = event => {
+      if (event.key === 'Escape' && !workSaving && !workDeleting) {
+        setWorkEditor(null)
+        setWorkDeleteTarget(null)
+      }
+    }
+    document.addEventListener('keydown', dismissOnEscape)
+    return () => document.removeEventListener('keydown', dismissOnEscape)
+  }, [workEditor, workDeleteTarget, workSaving, workDeleting])
+
+  const openWorkEditor = (kind, item, event) => {
+    event?.preventDefault()
+    event?.stopPropagation()
+    setWorkSaveError('')
+    setWorkImageChanged(false)
+    setWorkDraft({ image: item.image || '', description: item.description || '' })
+    setWorkEditor({ kind, item })
+  }
+
+  const requestWorkDelete = (kind, item, event) => {
+    event?.preventDefault()
+    event?.stopPropagation()
+    setWorkDeleteError('')
+    setWorkDeleteTarget({ kind, item })
+  }
+
+  const chooseWorkImage = async event => {
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    input.value = ''
+    if (!file) return
+    setWorkSaveError('')
+    if (!file.type.startsWith('image/')) {
+      setWorkSaveError('Choose an image file for this work item.')
+      return
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setWorkSaveError('Choose an image smaller than 12 MB.')
+      return
+    }
+    try {
+      const image = await getFilmPosterDataUrl(file)
+      if (image.length > 1_500_000) throw new Error('This image is too large after compression. Choose a smaller image.')
+      setWorkDraft(current => ({ ...current, image }))
+      setWorkImageChanged(true)
+    } catch (error) {
+      setWorkSaveError(error.message || 'Unable to prepare that image.')
+    }
+  }
+
+  const writeWorkCache = (kind, recordKey, updater) => {
+    const storageKey = kind === 'film' ? 'a-max-published-films' : kind === 'equipment' ? 'a-max-published-equipment' : 'a-max-published-scripts'
+    const records = readPublishedItems(storageKey)
+    localStorage.setItem(storageKey, JSON.stringify(records.map(record => workRecordKey(record) === String(recordKey) ? updater(record) : record)))
+  }
+
+  const saveWorkEdit = async event => {
+    event.preventDefault()
+    if (!workEditor || workSaving) return
+    const { kind, item } = workEditor
+    const description = workDraft.description.trim()
+    const maxDescriptionLength = kind === 'equipment' ? 3000 : 5000
+    if (description.length > maxDescriptionLength || (kind === 'equipment' && !description)) {
+      setWorkSaveError(kind === 'equipment' ? 'Add a description of up to 3,000 characters.' : `Keep the logline under ${maxDescriptionLength.toLocaleString()} characters.`)
+      return
+    }
+    const recordKey = workRecordKey(item)
+    const hasServerRecord = /^[a-f\d]{24}$/i.test(recordKey)
+    const updates = { description, ...(workImageChanged ? { image: workDraft.image, imageKey: undefined } : {}) }
+    setWorkSaving(true)
+    setWorkSaveError('')
+    try {
+      let nextRecord = { ...item, ...updates }
+      if (hasServerRecord) {
+        const path = kind === 'equipment' ? `/equipment/${encodeURIComponent(recordKey)}` : `/content/${encodeURIComponent(recordKey)}`
+        const body = kind === 'equipment'
+          ? { description, ...(workImageChanged ? { imageDataUrl: workDraft.image } : {}) }
+          : { description, ...(workImageChanged ? { posterUrl: workDraft.image } : {}) }
+        const saved = await apiRequest(path, { method: 'PATCH', body: JSON.stringify(body) })
+        const mapped = kind === 'film' ? mapApiFilm(saved) : kind === 'equipment' ? mapApiEquipment(saved) : mapApiScript(saved)
+        nextRecord = { ...item, ...mapped, description, ...(workImageChanged ? { image: workDraft.image, imageKey: undefined } : {}) }
+        if (kind === 'script') {
+          nextRecord.documentKey = item.documentKey
+          nextRecord.imageKey = workImageChanged ? undefined : item.imageKey
+        }
+        if (kind === 'film') {
+          nextRecord.videoKey = item.videoKey
+          nextRecord.video = mapped.video || item.video
+        }
+      }
+      writeWorkCache(kind, recordKey, record => ({ ...record, ...updates, ...(workImageChanged ? { posterUrl: workDraft.image, imageDataUrl: workDraft.image } : {}) }))
+      if (kind === 'film') setUserFilms(current => current.map(record => workRecordKey(record) === recordKey ? nextRecord : record))
+      else if (kind === 'equipment') setUserEquipment(current => current.map(record => workRecordKey(record) === recordKey ? nextRecord : record))
+      else setUserScripts(current => current.map(record => workRecordKey(record) === recordKey ? nextRecord : record))
+      setWorkEditor(null)
+      notifyPublishedContent()
+      window.dispatchEvent(new Event('amax:equipment-listing-updated'))
+    } catch (error) {
+      setWorkSaveError(error.message || 'Unable to save these changes. Please try again.')
+    } finally {
+      setWorkSaving(false)
+    }
+  }
+
+  const confirmWorkDelete = async () => {
+    if (!workDeleteTarget || workDeleting) return
+    const { kind, item } = workDeleteTarget
+    const recordKey = workRecordKey(item)
+    setWorkDeleting(true)
+    setWorkDeleteError('')
+    try {
+      if (/^[a-f\d]{24}$/i.test(recordKey)) {
+        const path = kind === 'equipment' ? `/equipment/${encodeURIComponent(recordKey)}` : `/content/${encodeURIComponent(recordKey)}`
+        await apiRequest(path, { method: 'DELETE' })
+      }
+      const storageKey = kind === 'film' ? 'a-max-published-films' : kind === 'equipment' ? 'a-max-published-equipment' : 'a-max-published-scripts'
+      localStorage.setItem(storageKey, JSON.stringify(readPublishedItems(storageKey).filter(record => workRecordKey(record) !== recordKey)))
+      if (kind === 'film') setUserFilms(current => current.filter(record => workRecordKey(record) !== recordKey))
+      else if (kind === 'equipment') setUserEquipment(current => current.filter(record => workRecordKey(record) !== recordKey))
+      else setUserScripts(current => current.filter(record => workRecordKey(record) !== recordKey))
+      setWorkDeleteTarget(null)
+      notifyPublishedContent()
+      window.dispatchEvent(new Event('amax:equipment-listing-updated'))
+    } catch (error) {
+      setWorkDeleteError(error.message || 'Unable to delete this work item. Please try again.')
+    } finally {
+      setWorkDeleting(false)
+    }
+  }
 
   const editField = field => event => setDraft(current => ({ ...current, [field]: event.target.value }))
   const chooseProfileImage = event => {
@@ -3235,7 +3428,7 @@ function ProfileView() {
       </div>
       {userFilms.length ? (
         <div className="film-grid">
-          {userFilms.map(film => <FilmCard key={film.contentId || film.localId || film.id || film.title} film={film} showAccent={false} profileContext/>)}
+          {userFilms.map(film => <FilmCard key={film.contentId || film.localId || film.id || film.title} film={film} showAccent={false} profileContext manageActions={isOwnProfile} onEditWork={(item, event) => openWorkEditor('film', item, event)} onDeleteWork={(item, event) => requestWorkDelete('film', item, event)}/>)}
         </div>
       ) : (
         <div className="profile-empty-work">
@@ -3258,7 +3451,7 @@ function ProfileView() {
       </div>
       {userScripts.length ? (
         <div className="explore-grid">
-          {userScripts.map(script => <ScriptCard key={script.contentId || script.title} script={script} profileContext/>)}
+          {userScripts.map(script => <ScriptCard key={script.contentId || script.title} script={script} profileContext manageActions={isOwnProfile} onEditWork={(item, event) => openWorkEditor('script', item, event)} onDeleteWork={(item, event) => requestWorkDelete('script', item, event)}/>)}
         </div>
       ) : (
         <div className="profile-empty-work">
@@ -3290,6 +3483,7 @@ function ProfileView() {
                 <th>Price</th>
                 <th>Location</th>
                 <th>Status</th>
+                {isOwnProfile && <th><span className="sr-only">Actions</span></th>}
               </tr>
             </thead>
             <tbody>
@@ -3315,8 +3509,9 @@ function ProfileView() {
                     <small>{item.location}</small>
                   </td>
                   <td>
-                    <span className="equipment-tag" style={{ position: 'static' }}>ACTIVE</span>
+                    <span className={`equipment-tag${item.active === false ? ' is-inactive' : ''}`} style={{ position: 'static' }}>{item.active === false ? 'INACTIVE' : 'ACTIVE'}</span>
                   </td>
+                  {isOwnProfile && <td className="work-actions-cell"><WorkItemActions inline onEdit={event => openWorkEditor('equipment', item, event)} onDelete={event => requestWorkDelete('equipment', item, event)}/></td>}
                 </tr>
               ))}
             </tbody>
@@ -3534,6 +3729,43 @@ function ProfileView() {
             <button className="primary-button" disabled={profileSaving} type="submit">{profileSaving ? 'Saving…' : 'Save changes'}</button>
           </form>
         </div>
+      )}
+
+      {workEditor && createPortal(
+        <div className="work-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !workSaving) setWorkEditor(null) }}>
+          <form className="work-modal" role="dialog" aria-modal="true" aria-labelledby="work-edit-title" onSubmit={saveWorkEdit} onMouseDown={event => event.stopPropagation()}>
+            <div className="work-modal-header">
+              <div><span className="eyebrow warm">YOUR WORK</span><h2 id="work-edit-title">Edit {workEditor.kind === 'equipment' ? 'listing' : workEditor.kind}</h2></div>
+              <button className="work-modal-close" type="button" aria-label="Close editor" disabled={workSaving} onClick={() => setWorkEditor(null)}><X size={18}/></button>
+            </div>
+            <div className="work-edit-image-row">
+              <img src={workDraft.image || workEditor.item.image || ''} alt="Work display image preview"/>
+              <div><strong>{workEditor.item.title}</strong><span>Update the image shown on this card.</span>
+                <input id="work-image-upload" className="hidden-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseWorkImage}/>
+                <label className="outline-button" htmlFor="work-image-upload"><Camera size={14}/> Change display image</label>
+              </div>
+            </div>
+            <label className="work-modal-field">{workEditor.kind === 'equipment' ? 'Description' : 'Logline'}
+              <textarea autoFocus maxLength={workEditor.kind === 'equipment' ? 3000 : 5000} value={workDraft.description} onChange={event => { setWorkDraft(current => ({ ...current, description: event.target.value })); setWorkSaveError('') }} placeholder={workEditor.kind === 'equipment' ? 'Describe this equipment listing.' : 'Write a short logline for this work.'}/>
+            </label>
+            {workSaveError && <p className="work-modal-error" role="alert">{workSaveError}</p>}
+            <div className="work-modal-actions"><button className="work-modal-cancel" type="button" disabled={workSaving} onClick={() => setWorkEditor(null)}>Cancel</button><button className="primary-button" type="submit" disabled={workSaving}>{workSaving ? 'Saving…' : 'Save changes'} <Check size={15}/></button></div>
+          </form>
+        </div>, document.body
+      )}
+
+      {workDeleteTarget && createPortal(
+        <div className="work-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !workDeleting) setWorkDeleteTarget(null) }}>
+          <section className="work-modal work-delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="work-delete-title" aria-describedby="work-delete-description" onMouseDown={event => event.stopPropagation()}>
+            <div className="work-delete-icon"><Trash2 size={20}/></div>
+            <button className="work-modal-close work-delete-close" type="button" aria-label="Close confirmation" disabled={workDeleting} onClick={() => setWorkDeleteTarget(null)}><X size={18}/></button>
+            <span className="eyebrow warm">REMOVE FROM AMAX</span>
+            <h2 id="work-delete-title">Confirm delete?</h2>
+            <p id="work-delete-description">Delete <strong>{workDeleteTarget.item.title}</strong>? It will be removed from your profile and the site. This can’t be undone.</p>
+            {workDeleteError && <p className="work-modal-error" role="alert">{workDeleteError}</p>}
+            <div className="work-modal-actions"><button className="work-modal-cancel" type="button" disabled={workDeleting} onClick={() => setWorkDeleteTarget(null)}>Keep it</button><button className="work-delete-confirm" type="button" disabled={workDeleting} onClick={confirmWorkDelete}>{workDeleting ? 'Deleting…' : 'Delete permanently'} <Trash2 size={14}/></button></div>
+          </section>
+        </div>, document.body
       )}
     </>
   )
@@ -3927,6 +4159,8 @@ function FilmUploadPage() {
       })
 
       const publishedFilm = {
+        ownerId: String(user?._id || user?.id || ''),
+        ownerUsername: user?.username || '',
         title: form.title.trim(),
         creator: directorName,
         director: directorName,
@@ -4342,6 +4576,8 @@ function ScriptUploadPage() {
       })
       const publishedScript = {
         ...mapApiScript(savedContent),
+        ownerId: String(user?._id || user?.id || ''),
+        ownerUsername: user?.username || '',
         image: posterUrl || scripts[0].image,
         documentUrl: resolveApiMediaUrl(uploadedDocument.documentUrl),
         accent: 'Just published'

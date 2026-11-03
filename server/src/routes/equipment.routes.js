@@ -25,6 +25,7 @@ function listingForClient(listing) {
     sellerUsername: listing.seller?.username || '',
     sellerId: String(listing.seller?._id || listing.seller),
     sellerAvatarUrl: listing.seller?.avatarUrl || '',
+    active: Boolean(listing.active),
     createdAt: listing.createdAt
   }
 }
@@ -57,6 +58,16 @@ async function ensureBuyerApprovalNotification(req, request) {
     })
   }
 }
+
+router.get('/mine', protect, async (req, res, next) => {
+  try {
+    const listings = await EquipmentListing.find({ seller: req.user._id })
+      .populate('seller', sellerFields)
+      .sort('-createdAt')
+      .limit(500)
+    res.json(listings.map(listingForClient))
+  } catch (error) { next(error) }
+})
 
 router.get('/', optionalProtect, async (_req, res, next) => {
   try {
@@ -109,6 +120,55 @@ router.post('/', protect, async (req, res, next) => {
     const clientListing = listingForClient(listing)
     req.app.get('io')?.emit('equipment:listing:created', clientListing)
     res.status(201).json(clientListing)
+  } catch (error) { next(error) }
+})
+
+router.patch('/:id', protect, async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: 'Equipment listing not found.' })
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}
+    const allowedFields = new Set(['imageDataUrl', 'description'])
+    const keys = Object.keys(body)
+    if (!keys.length || keys.some(key => !allowedFields.has(key))) {
+      return res.status(400).json({ message: 'Only the listing photo and description can be changed here.' })
+    }
+    if (Object.hasOwn(body, 'imageDataUrl') && (typeof body.imageDataUrl !== 'string' || body.imageDataUrl.length > 1_600_000 || !imageDataUrlPattern.test(body.imageDataUrl))) {
+      return res.status(400).json({ message: 'Choose a valid image smaller than 1.2 MB.' })
+    }
+    if (Object.hasOwn(body, 'description') && (typeof body.description !== 'string' || !body.description.trim() || body.description.trim().length > 3000)) {
+      return res.status(400).json({ message: 'The listing description must be between 1 and 3,000 characters.' })
+    }
+    const updates = {}
+    if (Object.hasOwn(body, 'imageDataUrl')) updates.imageDataUrl = body.imageDataUrl
+    if (Object.hasOwn(body, 'description')) updates.description = body.description.trim()
+    const listing = await EquipmentListing.findOneAndUpdate(
+      { _id: req.params.id, seller: req.user._id },
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).populate('seller', sellerFields)
+    if (!listing) return res.status(404).json({ message: 'Your equipment listing could not be found.' })
+    const clientListing = listingForClient(listing)
+    req.app.get('io')?.emit('equipment:listing:updated', clientListing)
+    res.json(clientListing)
+  } catch (error) { next(error) }
+})
+
+router.delete('/:id', protect, async (req, res, next) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ message: 'Equipment listing not found.' })
+    const listing = await EquipmentListing.findOneAndDelete({ _id: req.params.id, seller: req.user._id })
+    if (!listing) return res.status(404).json({ message: 'Your equipment listing could not be found.' })
+    const requests = await EquipmentRequest.find({ listing: listing._id }).select('_id').lean()
+    const requestIds = requests.map(request => request._id)
+    await Promise.all([
+      EquipmentRequest.deleteMany({ listing: listing._id }),
+      Notification.deleteMany({ $or: [
+        { equipmentListing: listing._id },
+        ...(requestIds.length ? [{ equipmentRequest: { $in: requestIds } }] : [])
+      ] })
+    ])
+    req.app.get('io')?.emit('equipment:listing:removed', { listingId: String(listing._id) })
+    res.json({ deleted: true, listingId: String(listing._id) })
   } catch (error) { next(error) }
 })
 

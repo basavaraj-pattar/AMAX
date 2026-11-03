@@ -1,9 +1,13 @@
 import { Router } from 'express'
 import mongoose from 'mongoose'
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import Comment from '../models/Comment.js'
 import Content from '../models/Content.js'
 import ContentView from '../models/ContentView.js'
 import Notification from '../models/Notification.js'
+import Report from '../models/Report.js'
+import { filmVideoDirectory, scriptDocumentDirectory } from '../config/storage.js'
 import { optionalProtect, protect } from '../middleware/auth.js'
 import { notifyFilmActivity } from '../services/notifications.js'
 
@@ -124,6 +128,83 @@ router.get('/', optionalProtect, async (req, res, next) => {
   } catch (error) {
     next(error)
   }
+})
+
+router.get('/mine', protect, async (req, res, next) => {
+  try {
+    const items = await Content.find({
+      creator: req.user._id,
+      moderationStatus: { $ne: 'removed' },
+      type: { $in: ['film', 'script', 'story'] }
+    }).populate('creator', publicCreatorFields).sort('-createdAt').limit(500)
+    res.json(items.map(item => contentForClient(item, req.user._id)))
+  } catch (error) { next(error) }
+})
+
+router.patch('/:id', protect, async (req, res, next) => {
+  try {
+    if (!validObjectId(req.params.id)) return res.status(404).json({ message: 'Content not found.' })
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}
+    const allowedFields = new Set(['posterUrl', 'description'])
+    const keys = Object.keys(body)
+    if (!keys.length || keys.some(key => !allowedFields.has(key))) {
+      return res.status(400).json({ message: 'Only a poster and logline can be changed here.' })
+    }
+    if (Object.hasOwn(body, 'posterUrl') && (typeof body.posterUrl !== 'string' || body.posterUrl.length > 2_000_000)) {
+      return res.status(400).json({ message: 'Choose an image smaller than 2 MB.' })
+    }
+    if (Object.hasOwn(body, 'description') && (typeof body.description !== 'string' || body.description.length > 5000)) {
+      return res.status(400).json({ message: 'The logline must be 5,000 characters or fewer.' })
+    }
+    const updates = {}
+    if (Object.hasOwn(body, 'posterUrl')) updates.posterUrl = body.posterUrl
+    if (Object.hasOwn(body, 'description')) updates.description = body.description.trim()
+    const content = await Content.findOneAndUpdate({
+      _id: req.params.id,
+      creator: req.user._id,
+      moderationStatus: { $ne: 'removed' },
+      type: { $in: ['film', 'script', 'story'] }
+    }, { $set: updates }, { new: true, runValidators: true }).populate('creator', publicCreatorFields)
+    if (!content) return res.status(404).json({ message: 'Your published content could not be found.' })
+    const clientContent = contentForClient(content, req.user._id)
+    req.app.get('io')?.emit('content:updated', clientContent)
+    res.json(clientContent)
+  } catch (error) { next(error) }
+})
+
+async function removeUploadedContentFile(mediaUrl) {
+  if (typeof mediaUrl !== 'string' || !mediaUrl) return
+  let pathname
+  try { pathname = new URL(mediaUrl, 'http://localhost').pathname }
+  catch { return }
+  const video = pathname.match(/^\/api\/videos\/([a-f0-9-]{36}\.mp4)$/i)
+  const document = pathname.match(/^\/api\/scripts\/files\/([a-f0-9-]{36}\.(?:pdf|doc|docx|txt))$/i)
+  if (video) await rm(join(filmVideoDirectory, video[1]), { force: true })
+  if (document) await rm(join(scriptDocumentDirectory, document[1]), { force: true })
+}
+
+router.delete('/:id', protect, async (req, res, next) => {
+  try {
+    if (!validObjectId(req.params.id)) return res.status(404).json({ message: 'Content not found.' })
+    const content = await Content.findOneAndDelete({
+      _id: req.params.id,
+      creator: req.user._id,
+      type: { $in: ['film', 'script', 'story'] }
+    })
+    if (!content) return res.status(404).json({ message: 'Your published content could not be found.' })
+
+    const comments = await Comment.find({ content: content._id }).select('_id').lean()
+    const commentIds = comments.map(comment => comment._id)
+    await Promise.all([
+      Comment.deleteMany({ content: content._id }),
+      ContentView.deleteMany({ contentId: content._id }),
+      Notification.deleteMany({ $or: [{ content: content._id }, ...(commentIds.length ? [{ comment: { $in: commentIds } }] : [])] }),
+      Report.deleteMany({ contentType: 'content', contentId: content._id })
+    ])
+    await removeUploadedContentFile(content.mediaUrl)
+    req.app.get('io')?.emit('content:removed', { contentId: String(content._id), type: content.type })
+    res.json({ deleted: true, contentId: String(content._id) })
+  } catch (error) { next(error) }
 })
 
 router.get('/:id', optionalProtect, async (req, res, next) => {
